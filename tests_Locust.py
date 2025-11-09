@@ -1,0 +1,109 @@
+from locust import HttpUser, task, between
+import requests
+import json
+import time
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+class OpenBMCUser(HttpUser):
+    host = "https://localhost:2443"
+    wait_time = between(1, 3)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.auth = ("root", "0penBmc")
+        self.verify_ssl = False
+
+    @task(3)
+    def get_system_info(self):
+        with self.client.get(
+            "/redfish/v1/Systems/system",
+            auth=self.auth,
+            verify=self.verify_ssl,
+            catch_response=True,
+            name="OpenBMC - System Info"
+        ) as response:
+            if response.status_code == 200:
+                try:
+                    system_data = response.json()
+                    if 'Name' in system_data and 'Id' in system_data:
+                        response.success()
+                    else:
+                        response.failure("Invalid system response format")
+                except json.JSONDecodeError:
+                    response.failure("Invalid JSON in system response")
+            else:
+                response.failure(f"HTTP {response.status_code} for system info")
+
+    @task(2)
+    def get_power_state(self):
+        with self.client.get(
+            "/redfish/v1/Systems/system",
+            auth=self.auth,
+            verify=self.verify_ssl,
+            catch_response=True,
+            name="OpenBMC - Power State"
+        ) as response:
+            if response.status_code == 200:
+                try:
+                    system_data = response.json()
+                    power_state = system_data.get('PowerState')
+                    if power_state in ['On', 'Off', 'PoweringOn', 'PoweringOff']:
+                        response.success()
+                    else:
+                        response.failure(f"Invalid power state: {power_state}")
+                except (json.JSONDecodeError, KeyError):
+                    response.failure("Power state not found or invalid JSON")
+            else:
+                response.failure(f"HTTP {response.status_code} for power state")
+
+
+class JSONPlaceholderUser(HttpUser):
+    host = "https://jsonplaceholder.typicode.com"
+    wait_time = between(0.5, 2)
+
+    @task
+    def get_posts_list(self):
+        with self.client.get(
+            "/posts",
+            catch_response=True,
+            name="JSONPlaceholder - Posts List"
+        ) as response:
+            if response.status_code == 200:
+                try:
+                    posts = response.json()
+                    if isinstance(posts, list) and len(posts) > 0 and all('id' in post and 'title' in post for post in posts):
+                        response.success()
+                    else:
+                        response.failure("Empty or invalid posts list")
+                except json.JSONDecodeError:
+                    response.failure("Invalid JSON in posts response")
+            else:
+                response.failure(f"HTTP {response.status_code} for posts list")
+
+
+class WeatherAPIUser(HttpUser):
+    host = "https://wttr.in"
+    wait_time = between(1, 3)
+
+    @task
+    def get_weather(self):
+        with self.client.get(
+            "/Novosibirsk?format=j1",
+            headers={"User-Agent": "locust-load-test"},
+            verify=False,
+            catch_response=True,
+            name="Weather API - Novosibirsk"
+        ) as response:
+            if response.status_code == 200:
+                try:
+                    weather_data = response.json()
+                    if "current_condition" in weather_data:
+                        response.success()
+                    else:
+                        response.failure("Invalid weather response format")
+                except json.JSONDecodeError:
+                    response.failure("Invalid JSON in weather response")
+            else:
+                response.failure(f"HTTP {response.status_code}")
