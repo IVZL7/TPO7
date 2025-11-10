@@ -4,22 +4,30 @@ pipeline {
     environment {
         REPORTS_DIR = "reports"
         PYTHON_PATH = "/usr/bin/python3"
+        VENV_PATH = ".venv"
     }
 
     stages {
         stage('Setup Python Environment') {
             steps {
+                // Create a per-job virtualenv to avoid system-managed pip issues (PEP 668)
                 sh '''
-                    python3 -m pip install --upgrade pip
-                    pip3 install requests selenium locust pytest pytest-html
+                    set -e
+                    echo "Creating virtualenv at ${VENV_PATH}"
+                    ${PYTHON_PATH} -m venv ${VENV_PATH}
+                    ${VENV_PATH}/bin/python -m pip install --upgrade pip
+                    ${VENV_PATH}/bin/pip install --upgrade requests selenium locust pytest pytest-html junit-xml
+                    ${VENV_PATH}/bin/python -m pip show pytest || true
                 '''
             }
         }
 
         stage('Checkout') {
             steps {
+                // If Jenkins multibranch/job already checks out repo this is a no-op, otherwise keep checkout
                 git 'https://github.com/IVZL7/TPO7.git'
                 sh 'mkdir -p ${REPORTS_DIR}'
+                sh 'ls -la'
             }
         }
 
@@ -27,21 +35,33 @@ pipeline {
             steps {
                 echo "Starting OpenBMC QEMU instance..."
                 sh '''
-                    # Даем права на выполнение если нужно
+                    set -e
                     chmod +x OBMC-Romulus-image.mtd 2>/dev/null || true
-                    
-                    # Запускаем QEMU в фоне
-                    nohup qemu-system-arm -m 256 -M romulus-bmc -nographic \
+
+                    # Kill leftover qemu if any
+                    pkill -f qemu-system-arm || true
+                    sleep 1 || true
+
+                    # Запускаем QEMU в фоне и направляем консоль в файл
+                    nohup qemu-system-arm -m 512 -M romulus-bmc -nographic \
                         -drive file=OBMC-Romulus-image.mtd,format=raw,if=mtd \
-                        -net nic -net user,hostfwd=:0.0.0.0:2222-:22,hostfwd=:0.0.0.0:2443-:443,hostfwd=udp:0.0.0.0:2623-:623,hostname=qemu \
+                        -netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::2443-:443,hostfwd=udp::2623-:623 \
+                        -device virtio-net-device,netdev=net0 \
                         > ${REPORTS_DIR}/qemu_console.log 2>&1 &
-                    
-                    # Ждем загрузки системы
-                    echo "Waiting for OpenBMC to boot..."
-                    sleep 60
-                    
-                    # Проверяем, запустился ли процесс QEMU
-                    ps aux | grep qemu
+
+                    # Ждем загрузки системы с повторными проверками (up to ~3 minutes)
+                    echo "Waiting for OpenBMC to boot (checking HTTPS port)..."
+                    for i in {1..18}; do
+                        if curl -k --connect-timeout 5 https://127.0.0.1:2443 -I >/dev/null 2>&1; then
+                            echo "OpenBMC web service is up"
+                            break
+                        fi
+                        echo "waiting... ($i)"
+                        sleep 10
+                    done
+
+                    # Дамп последних строк консоли
+                    tail -n 200 ${REPORTS_DIR}/qemu_console.log || true
                 '''
             }
             post {
@@ -54,12 +74,21 @@ pipeline {
         stage('Wait for OpenBMC Services') {
             steps {
                 sh '''
-                    # Ждем доступности сервисов
-                    echo "Waiting for OpenBMC services to start..."
-                    sleep 30
-                    
-                    # Проверяем доступность веб-интерфейса
-                    curl -k -I https://localhost:2443 || echo "Web interface not ready yet"
+                    echo "Checking OpenBMC services (SSH/HTTPS)"
+                    for i in {1..12}; do
+                        printf "Attempt %d: " "$i"
+                        if curl -k --connect-timeout 5 https://127.0.0.1:2443 -I >/dev/null 2>&1; then
+                            echo "HTTPS OK"
+                            break
+                        fi
+                        sleep 5
+                    done
+
+                    if nc -zv 127.0.0.1 2222 >/dev/null 2>&1; then
+                        echo "SSH forwarded port reachable"
+                    else
+                        echo "SSH forwarded port not reachable (2222)"
+                    fi
                 '''
             }
         }
@@ -68,12 +97,14 @@ pipeline {
             steps {
                 echo "Running Redfish API Tests..."
                 sh '''
-                    python3 -m pytest tests_Redfish.py --junitxml=${REPORTS_DIR}/redfish_results.xml -v || true
+                    set -o pipefail
+                    ${VENV_PATH}/bin/python -m pytest tests_Redfish.py --junitxml=${REPORTS_DIR}/redfish_results.xml -v 2>&1 | tee ${REPORTS_DIR}/redfish_pytest.log || true
                 '''
             }
             post {
                 always {
                     junit "${REPORTS_DIR}/redfish_results.xml"
+                    archiveArtifacts artifacts: "${REPORTS_DIR}/redfish_pytest.log, ${REPORTS_DIR}/redfish_results.xml", fingerprint: true
                 }
             }
         }
@@ -82,11 +113,13 @@ pipeline {
             steps {
                 echo "Running WebUI Selenium Tests..."
                 sh '''
-                    python3 -m pytest tests_WebUI.py --html=${REPORTS_DIR}/webui_report.html --self-contained-html -v || true
+                    set -o pipefail
+                    ${VENV_PATH}/bin/python -m pytest tests_WebUI.py --html=${REPORTS_DIR}/webui_report.html --self-contained-html -v 2>&1 | tee ${REPORTS_DIR}/webui_pytest.log || true
                 '''
             }
             post {
                 always {
+                    archiveArtifacts artifacts: "${REPORTS_DIR}/webui_report.html, ${REPORTS_DIR}/webui_pytest.log", fingerprint: true
                     publishHTML(target: [
                         allowMissing: true,
                         alwaysLinkToLastBuild: true,
@@ -103,7 +136,9 @@ pipeline {
             steps {
                 echo "Running Locust Load Tests..."
                 sh '''
-                    python3 tests_Locust.py > ${REPORTS_DIR}/locust_log.txt 2>&1 || true
+                    set -o pipefail
+                    # Запуск теста локально (скрипт должен формировать отчеты в reports/)
+                    ${VENV_PATH}/bin/python tests_Locust.py > ${REPORTS_DIR}/locust_log.txt 2>&1 || true
                 '''
             }
             post {
