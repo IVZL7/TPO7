@@ -24,8 +24,9 @@ pipeline {
 
         stage('Checkout') {
             steps {
-                // If Jenkins multibranch/job already checks out repo this is a no-op, otherwise keep checkout
-                git 'https://github.com/IVZL7/TPO7.git'
+                // Use the same SCM that started the pipeline (reuses credentials configured in the job)
+                // This avoids switching to an unauthenticated HTTPS fetch which can fail for private repos.
+                checkout scm
                 sh 'mkdir -p ${REPORTS_DIR}'
                 sh 'ls -la'
             }
