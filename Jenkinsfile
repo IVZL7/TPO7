@@ -141,7 +141,7 @@ pipeline {
             }
             post {
                 always {
-                    archiveArtifacts artifacts: "${REPORTS_DIR}/locust_log.txt", fingerprint: true
+                    archiveArtifacts artifacts: "${REPORTS_DIR}/locust_log.txt, ${REPORTS_DIR}/locust_report.html", fingerprint: true
                 }
             }
         }

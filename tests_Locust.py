@@ -107,3 +107,30 @@ class WeatherAPIUser(HttpUser):
                     response.failure("Invalid JSON in weather response")
             else:
                 response.failure(f"HTTP {response.status_code}")
+
+
+    if __name__ == "__main__":
+        # Allow running this file directly in CI: invoke locust CLI programmatically using the same Python
+        import os
+        import sys
+        import subprocess
+
+        # Defaults can be overridden by environment variables
+        users = os.getenv('LOCUST_USERS', '5')
+        spawn_rate = os.getenv('LOCUST_SPAWN_RATE', '1')
+        run_time = os.getenv('LOCUST_RUN_TIME', '30s')
+        report_dir = os.getenv('REPORTS_DIR', 'reports')
+        report_file = os.path.join(report_dir, os.getenv('LOCUST_REPORT', 'locust_report.html'))
+
+        os.makedirs(report_dir, exist_ok=True)
+
+        # Build locust CLI command using the same Python executable (so venv is respected)
+        cmd = [sys.executable, '-m', 'locust', '-f', __file__, '--headless', '-u', users, '-r', spawn_rate, '-t', run_time, '--html', report_file]
+
+        print(f"Running Locust: {' '.join(cmd)}")
+        try:
+            subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Locust run failed with exit {e.returncode}")
+            # still exit 0 to avoid failing the whole pipeline; artifacts will show results
+            sys.exit(e.returncode)
