@@ -44,15 +44,12 @@ pipeline {
                     sleep 1 || true
 
                     # Запускаем QEMU в фоне и направляем консоль в файл
-                    nohup qemu-system-arm -m 512 -M romulus-bmc -nographic \
-                        -drive file=OBMC-Romulus-image.mtd,format=raw,if=mtd \
-                        -netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::2443-:443,hostfwd=udp::2623-:623 \
-                        -device virtio-net-device,netdev=net0 \
+                    nohup qemu-system-arm -m 256 -M romulus-bmc -nographic -drive file=./OBMC-Romulus-image.mtd,format=raw,if=mtd -net nic -net user,hostfwd=:0.0.0.0:2222-:22,hostfwd=:0.0.0.0:2443-:443,hostfwd=udp:0.0.0.0:2623-:623,hostname=qemu \
                         > ${REPORTS_DIR}/qemu_console.log 2>&1 &
 
                     # Ждем загрузки системы с повторными проверками (up to ~3 minutes)
                     echo "Waiting for OpenBMC to boot (checking HTTPS port)..."
-                    for i in {1..18}; do
+                    for i in $(seq 1 18); do
                         if curl -k --connect-timeout 5 https://127.0.0.1:2443 -I >/dev/null 2>&1; then
                             echo "OpenBMC web service is up"
                             break
@@ -76,7 +73,7 @@ pipeline {
             steps {
                 sh '''
                     echo "Checking OpenBMC services (SSH/HTTPS)"
-                    for i in {1..12}; do
+                    for i in $(seq 1 12); do
                         printf "Attempt %d: " "$i"
                         if curl -k --connect-timeout 5 https://127.0.0.1:2443 -I >/dev/null 2>&1; then
                             echo "HTTPS OK"
