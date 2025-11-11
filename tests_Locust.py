@@ -109,50 +109,28 @@ class WeatherAPIUser(HttpUser):
                 response.failure(f"HTTP {response.status_code}")
 
 
-if __name__ == "__main__":
-    # Allow running this file directly in CI: invoke locust CLI programmatically using the same Python
-    import os
-    import sys
-    import subprocess
-    import html as _html
+    if __name__ == "__main__":
+        # Allow running this file directly in CI: invoke locust CLI programmatically using the same Python
+        import os
+        import sys
+        import subprocess
 
-    # Defaults can be overridden by environment variables
-    users = os.getenv('LOCUST_USERS', '5')
-    spawn_rate = os.getenv('LOCUST_SPAWN_RATE', '1')
-    run_time = os.getenv('LOCUST_RUN_TIME', '30s')
-    report_dir = os.getenv('REPORTS_DIR', 'reports')
-    report_file = os.path.join(report_dir, os.getenv('LOCUST_REPORT', 'locust_report.html'))
+        # Defaults can be overridden by environment variables
+        users = os.getenv('LOCUST_USERS', '5')
+        spawn_rate = os.getenv('LOCUST_SPAWN_RATE', '1')
+        run_time = os.getenv('LOCUST_RUN_TIME', '30s')
+        report_dir = os.getenv('REPORTS_DIR', 'reports')
+        report_file = os.path.join(report_dir, os.getenv('LOCUST_REPORT', 'locust_report.html'))
 
-    os.makedirs(report_dir, exist_ok=True)
+        os.makedirs(report_dir, exist_ok=True)
 
-    # Build locust CLI command using the same Python executable (so venv is respected)
-    cmd = [sys.executable, '-m', 'locust', '-f', __file__, '--headless', '-u', users, '-r', spawn_rate, '-t', run_time, '--html', report_file]
+        # Build locust CLI command using the same Python executable (so venv is respected)
+        cmd = [sys.executable, '-m', 'locust', '-f', __file__, '--headless', '-u', users, '-r', spawn_rate, '-t', run_time, '--html', report_file]
 
-    print(f"Running Locust: {' '.join(cmd)}")
-    # Capture output so we can always produce artifacts for Jenkins
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    cli_out = proc.stdout or ""
-    cli_err = proc.stderr or ""
-    cli_out_file = os.path.join(report_dir, os.getenv('LOCUST_CLI_OUT', 'locust_cli_output.txt'))
-    with open(cli_out_file, 'w', encoding='utf-8') as f:
-        f.write('=== LOCUST STDOUT ===\n')
-        f.write(cli_out)
-        f.write('\n=== LOCUST STDERR ===\n')
-        f.write(cli_err)
-
-    # If locust didn't generate the HTML report, create a placeholder to archive
-    if not os.path.exists(report_file) or proc.returncode != 0:
-        placeholder_path = report_file
-        with open(placeholder_path, 'w', encoding='utf-8') as f:
-            f.write('<html><head><title>Locust report</title></head><body>')
-            f.write('<h1>Locust run did not produce an HTML report</h1>')
-            f.write(f'<p>Return code: {proc.returncode}</p>')
-            f.write('<h2>CLI output</h2><pre>')
-            # escape HTML
-            f.write(_html.escape(cli_out + '\n' + cli_err))
-            f.write('</pre></body></html>')
-
-    # Print summary for Jenkins console
-    print(f"Locust finished with return code {proc.returncode}; CLI output saved to {cli_out_file}; HTML report at {report_file}")
-    # Do not sys.exit with non-zero to avoid failing whole pipeline; Jenkins will mark unstable if needed
-    # but keep the locust return code available via the CLI output
+        print(f"Running Locust: {' '.join(cmd)}")
+        try:
+            subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Locust run failed with exit {e.returncode}")
+            # still exit 0 to avoid failing the whole pipeline; artifacts will show results
+            sys.exit(e.returncode)
